@@ -1,0 +1,53 @@
+name: Anna Darpan Daily Report
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    # 08:00 AM India time
+    # GitHub Actions uses UTC
+    - cron: "30 2 * * *"
+
+jobs:
+  daily-report:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas openpyxl lxml html5lib beautifulsoup4
+
+      - name: Run Anna Darpan Daily Automation
+        env:
+          ANNA_DARPAN_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
+          TO_NUMBER: ${{ secrets.TO_NUMBER }}
+        run: |
+          python anna_darpan_cloud.py
+
+      - name: Save Master Excel
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anna-darpan-master-${{ github.run_number }}
+          path: OUTPUT/ANNA_DARPAN_DAILY_MASTER*.xlsx
+          if-no-files-found: warn
+
+      - name: Save output files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: anna-darpan-output-${{ github.run_number }}
+          path: OUTPUT/
+          if-no-files-found: warn
