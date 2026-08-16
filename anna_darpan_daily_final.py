@@ -1207,13 +1207,41 @@ except Exception as e:
     raise SystemExit
 
 
-from_date = input(
-    "\nFrom Date (dd-mm-yyyy): "
-).strip()
+from zoneinfo import ZoneInfo
 
-to_date = input(
-    "To Date   (dd-mm-yyyy): "
-).strip()
+# ============================================================
+# AUTOMATIC DAILY DATE - INDIA
+# ============================================================
+
+india_now = datetime.now(
+    ZoneInfo("Asia/Kolkata")
+)
+
+from_date = india_now.strftime("%d-%m-%Y")
+to_date = from_date
+
+print(
+    "\nAutomatic Daily Report Date"
+)
+
+print(
+    "-" * 70
+)
+
+print(
+    "India Date :",
+    from_date
+)
+
+print(
+    "From Date  :",
+    from_date
+)
+
+print(
+    "To Date    :",
+    to_date
+)
 
 print("\nParameters")
 print("-" * 70)
