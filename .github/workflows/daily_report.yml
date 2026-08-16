@@ -20,15 +20,15 @@ jobs:
         run: |
           pip install requests pandas openpyxl lxml html5lib beautifulsoup4
 
-      - name: Check WhatsApp To Secret
+      - name: Check TO_NUMBER Secret
         env:
-          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
+          TO_NUMBER: ${{ secrets.TO_NUMBER }}
         run: |
-          if [ -z "$WHATSAPP_TO" ]; then
+          if [ -z "$TO_NUMBER" ]; then
             echo "WHATSAPP_TO is MISSING"
             exit 1
           else
-            echo "WHATSAPP_TO is PRESENT"
+            echo "TO_NUMBER is PRESENT"
           fi
 
       - name: Run Anna Darpan Daily Report
