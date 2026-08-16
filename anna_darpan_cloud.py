@@ -4,307 +4,160 @@ import json
 from io import StringIO
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import requests
 import pandas as pd
 
 
 # ============================================================
-# ANNA DARPAN DAILY AUTOMATION - FINAL
+# ANNA DARPAN DAILY AUTOMATION - CLOUD / GITHUB ACTIONS
 #
-# DSI + DSR + 13 SHEDS + INSPECTION
-# + MASTER EXCEL
-# + WHATSAPP TEXT
-# + WHATSAPP EXCEL DOCUMENT
+# DAILY:
+#   Today From Date = Today
+#   Today To Date   = Today
 #
-# DSR FIX:
-#   - Parse HTML table-by-table
-#   - Do NOT depend only on "Shed/Stack" header
-#   - Automatically detect stack-like column
-#   - Handles changing table/header positions
+# REPORTS:
+#   DSI
+#   DSR
+#   INSPECTION
+#   MASTER EXCEL
+#
+# WHATSAPP:
+#   Text summary
+#   Master Excel document
+#
+# GITHUB SECRETS:
+#   ANNA_DARPAN_TOKEN
+#   WHATSAPP_TOKEN
+#   PHONE_NUMBER_ID
+#   TO_NUMBER
+#
+# Optional:
+#   WHATSAPP_API_VERSION
 # ============================================================
 
 
+# ============================================================
+# BASE / OUTPUT
+# ============================================================
+
 BASE = Path(__file__).resolve().parent
+
 OUTPUT = BASE / "OUTPUT"
-OUTPUT.mkdir(exist_ok=True)
+OUTPUT.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# TARGET SHEDS
+# ============================================================
 
 TARGET_SHEDS = {
-    "74", "75", "76", "77", "79", "80", "81",
-    "82", "85", "88", "89", "90", "103"
+    "74",
+    "75",
+    "76",
+    "77",
+    "79",
+    "80",
+    "81",
+    "82",
+    "85",
+    "88",
+    "89",
+    "90",
+    "103",
 }
+
 
 DEPOT_ID = "1696"
 
-WHATSAPP_API_VERSION = "v23.0"
+
+# ============================================================
+# TIMEZONE
+# ============================================================
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 # ============================================================
-# TOKEN
+# GITHUB SECRETS
 # ============================================================
 
-def load_token():
-    token_file = BASE / "token.txt"
+def get_env(*names):
+    """
+    Multiple secret names support.
+    First non-empty value will be used.
+    """
 
-    if token_file.exists():
-        token = token_file.read_text(
-            encoding="utf-8"
-        ).strip()
+    for name in names:
 
-        if token:
-            return token
+        value = os.getenv(name, "").strip()
 
-    return os.getenv(
+        if value:
+            return value
+
+    return ""
+
+
+def load_anna_token():
+
+    token = get_env(
         "ANNA_DARPAN_TOKEN",
-        ""
-    ).strip()
+        "ANNA_TOKEN",
+        "TOKEN",
+    )
 
+    return token
 
-# ============================================================
-# WHATSAPP CONFIG
-# ============================================================
 
 def load_whatsapp_config():
-    config_file = BASE / "whatsapp_config.txt"
 
-    if not config_file.exists():
-        raise RuntimeError(
-            "whatsapp_config.txt not found"
-        )
-
-    config = {}
-
-    for line in config_file.read_text(
-        encoding="utf-8"
-    ).splitlines():
-
-        line = line.strip()
-
-        if not line or line.startswith("#"):
-            continue
-
-        if "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        config[key.strip()] = value.strip()
-
-    token = config.get("TOKEN", "")
-    phone_number_id = config.get("PHONE_NUMBER_ID", "")
-    to_number = config.get("TO_NUMBER", "")
-
-    if not token:
-        raise RuntimeError(
-            "WhatsApp TOKEN missing"
-        )
-
-    if not phone_number_id:
-        raise RuntimeError(
-            "PHONE_NUMBER_ID missing"
-        )
-
-    if not to_number:
-        raise RuntimeError(
-            "TO_NUMBER missing"
-        )
-
-    to_number = re.sub(
-        r"\D",
-        "",
-        to_number
+    whatsapp_token = get_env(
+        "WHATSAPP_TOKEN",
+        "WHATSAPP_ACCESS_TOKEN",
+        "WA_TOKEN",
     )
 
-    return token, phone_number_id, to_number
-
-
-# ============================================================
-# WHATSAPP TEXT
-# ============================================================
-
-def send_whatsapp_message(message):
-
-    print("\n" + "=" * 70)
-    print("SENDING WHATSAPP MESSAGE")
-    print("=" * 70)
-
-    token, phone_number_id, to_number = (
-        load_whatsapp_config()
+    phone_number_id = get_env(
+        "PHONE_NUMBER_ID",
+        "WHATSAPP_PHONE_NUMBER_ID",
     )
 
-    url = (
-        f"https://graph.facebook.com/"
-        f"{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
+    to_number = get_env(
+        "TO_NUMBER",
+        "WHATSAPP_TO_NUMBER",
     )
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": message
-        }
-    }
-
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=60
+    api_version = get_env(
+        "WHATSAPP_API_VERSION",
     )
 
-    print("HTTP STATUS :", response.status_code)
-    print("RESPONSE    :", response.text)
+    if not api_version:
+        api_version = "v25.0"
 
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            "WhatsApp text message failed"
-        )
-
-    print("SUCCESS WhatsApp text sent.")
-
-
-# ============================================================
-# WHATSAPP EXCEL DOCUMENT
-# ============================================================
-
-def upload_whatsapp_document(file_path):
-
-    print("\n" + "=" * 70)
-    print("UPLOADING MASTER EXCEL TO WHATSAPP")
-    print("=" * 70)
-
-    token, phone_number_id, _ = (
-        load_whatsapp_config()
-    )
-
-    url = (
-        f"https://graph.facebook.com/"
-        f"{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/media"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-
-    mime_type = (
-        "application/vnd.openxmlformats-officedocument."
-        "spreadsheetml.sheet"
-    )
-
-    with open(file_path, "rb") as f:
-
-        files = {
-            "file": (
-                Path(file_path).name,
-                f,
-                mime_type
-            )
-        }
-
-        data = {
-            "messaging_product": "whatsapp",
-            "type": mime_type
-        }
-
-        response = requests.post(
-            url,
-            headers=headers,
-            data=data,
-            files=files,
-            timeout=120
-        )
-
-    print("UPLOAD STATUS :", response.status_code)
-    print("UPLOAD RESPONSE:", response.text)
-
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            "WhatsApp media upload failed"
-        )
-
-    result = response.json()
-    media_id = result.get("id")
-
-    if not media_id:
-        raise RuntimeError(
-            "WhatsApp media ID not returned"
-        )
-
-    print("Media ID :", media_id)
-
-    return media_id
-
-
-def send_whatsapp_document(
-    media_id,
-    file_name,
-    caption=""
-):
-
-    print("\n" + "=" * 70)
-    print("SENDING MASTER EXCEL TO WHATSAPP")
-    print("=" * 70)
-
-    token, phone_number_id, to_number = (
-        load_whatsapp_config()
-    )
-
-    url = (
-        f"https://graph.facebook.com/"
-        f"{WHATSAPP_API_VERSION}/"
-        f"{phone_number_id}/messages"
-    )
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-
-    document = {
-        "id": media_id,
-        "filename": file_name
-    }
-
-    if caption:
-        document["caption"] = caption
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "document",
-        "document": document
-    }
-
-    response = requests.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=60
-    )
-
-    print("DOCUMENT STATUS :", response.status_code)
-    print("DOCUMENT RESPONSE:", response.text)
-
-    if response.status_code not in (200, 201):
-        raise RuntimeError(
-            "WhatsApp document message failed"
-        )
-
-    print(
-        "SUCCESS Excel document sent to WhatsApp."
+    return (
+        whatsapp_token,
+        phone_number_id,
+        to_number,
+        api_version,
     )
 
 
 # ============================================================
-# ANNA DARPAN DOWNLOAD
+# TODAY DATE
+# ============================================================
+
+def get_today_dates():
+
+    now = datetime.now(IST)
+
+    today = now.strftime("%d-%m-%Y")
+
+    return today, today
+
+
+# ============================================================
+# ANNA DARPAN API
 # ============================================================
 
 def download_report(
@@ -312,93 +165,188 @@ def download_report(
     endpoint,
     referer,
     from_date,
-    to_date
+    to_date,
 ):
 
     print("\n" + "=" * 70)
-    print("Downloading", name)
+    print("DOWNLOADING", name)
     print("=" * 70)
 
-    token = load_token()
+    token = load_anna_token()
 
     if not token:
+
         raise RuntimeError(
-            "Anna Darpan token not found"
+            "ANNA_DARPAN_TOKEN secret not found."
         )
 
     headers = {
+
         "accept": (
             "application/json, "
             "text/plain, */*"
         ),
+
         "accept-language": "en",
-        "authorization": f"Bearer {token}",
-        "content-type": "application/json",
-        "depotid": DEPOT_ID,
-        "origin": "https://www.annadarpan.in",
-        "referer": referer,
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/151.0.0.0 Safari/537.36"
-        )
+
+        "authorization":
+            f"Bearer {token}",
+
+        "content-type":
+            "application/json",
+
+        "depotid":
+            DEPOT_ID,
+
+        "origin":
+            "https://www.annadarpan.in",
+
+        "referer":
+            referer,
+
+        "user-agent":
+            (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/151.0.0.0 "
+                "Safari/537.36"
+            ),
     }
+
 
     params = {
-        "fromDate": from_date,
-        "toDate": to_date,
-        "commodity": 0,
-        "cropyearId": 0,
-        "shed": 0,
-        "format": "html",
-        "unit": "MT"
+
+        "fromDate":
+            from_date,
+
+        "toDate":
+            to_date,
+
+        "commodity":
+            0,
+
+        "cropyearId":
+            0,
+
+        "shed":
+            0,
+
+        "format":
+            "html",
+
+        "unit":
+            "MT",
     }
 
+
     response = requests.get(
+
         endpoint,
+
         headers=headers,
+
         params=params,
-        timeout=300
+
+        timeout=300,
     )
 
-    print("HTTP Status :", response.status_code)
+
+    print(
+        "HTTP STATUS :",
+        response.status_code,
+    )
+
 
     if response.status_code != 200:
-        print(response.text[:1000])
+
+        print(
+            response.text[:2000]
+        )
 
         raise RuntimeError(
-            f"{name} API failed: "
+            f"{name} API failed "
             f"HTTP {response.status_code}"
         )
 
-    data = response.json()
 
-    json_file = OUTPUT / f"{name}_RESPONSE.json"
-    html_file = OUTPUT / f"{name}_REPORT.html"
+    try:
 
-    json_file.write_text(
-        json.dumps(
-            data,
-            ensure_ascii=False
-        ),
-        encoding="utf-8"
+        data = response.json()
+
+    except Exception:
+
+        raise RuntimeError(
+            f"{name}: API did not return JSON"
+        )
+
+
+    json_file = (
+        OUTPUT /
+        f"{name}_RESPONSE.json"
     )
 
-    html = data.get("value", "")
 
-    if not html:
-        raise RuntimeError(
-            f"{name} API returned empty HTML"
-        )
+    html_file = (
+        OUTPUT /
+        f"{name}_REPORT.html"
+    )
+
+
+    json_file.write_text(
+
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+        ),
+
+        encoding="utf-8",
+    )
+
+
+    html = data.get(
+        "value",
+        "",
+    )
+
+
+    if html is None:
+        html = ""
+
+
+    html = str(html)
+
 
     html_file.write_text(
         html,
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
-    print("JSON Saved :", json_file)
-    print("HTML Saved :", html_file)
-    print("HTML Length:", len(html))
+
+    print(
+        "JSON Saved :",
+        json_file,
+    )
+
+    print(
+        "HTML Saved :",
+        html_file,
+    )
+
+    print(
+        "HTML Length:",
+        len(html),
+    )
+
+
+    if not html.strip():
+
+        raise RuntimeError(
+            f"{name}: HTML report is empty"
+        )
+
 
     return html
 
@@ -410,360 +358,466 @@ def download_report(
 def extract_shed(value):
 
     if pd.isna(value):
+
         return ""
+
 
     text = str(value).strip()
 
+
+    # --------------------------------------------------------
+    # Examples:
+    #
     # 87/87D06
     # 100/100A08
     # 13/13C05
+    # --------------------------------------------------------
+
     match = re.match(
         r"^\s*(\d+)\s*/",
-        text
+        text,
     )
 
+
     if match:
+
         return match.group(1)
 
-    # Shed 85 / Shed: 85
+
+    # --------------------------------------------------------
+    # Shed 85
+    # Shed: 85
+    # Shed-85
+    # --------------------------------------------------------
+
     match = re.search(
         r"\bShed\s*[:\-]?\s*(\d+)\b",
         text,
-        re.I
+        re.I,
     )
 
+
     if match:
+
         return match.group(1)
 
+
+    # --------------------------------------------------------
     # Plain number
+    # --------------------------------------------------------
+
     match = re.match(
         r"^\s*(\d+)(?:\.0)?\s*$",
-        text
+        text,
     )
 
+
     if match:
+
         return match.group(1)
+
 
     return ""
 
 
-def is_stack_value(value):
-
-    if pd.isna(value):
-        return False
-
-    text = str(value).strip()
-
-    if re.match(
-        r"^\s*\d+\s*/",
-        text
-    ):
-        return True
-
-    if re.search(
-        r"\bShed\s*[:\-]?\s*\d+\b",
-        text,
-        re.I
-    ):
-        return True
-
-    return False
-
-
 # ============================================================
-# ROBUST SHED COLUMN DETECTION
+# FIND SHED COLUMN
 # ============================================================
 
-def score_shed_column(series):
-
-    values = (
-        series
-        .dropna()
-        .astype(str)
-        .str.strip()
-    )
-
-    if values.empty:
-        return 0
-
-    stack_count = int(
-        values.apply(is_stack_value).sum()
-    )
-
-    target_count = int(
-        values.apply(
-            lambda x:
-            extract_shed(x) in TARGET_SHEDS
-        ).sum()
-    )
-
-    # Target shed matches are stronger evidence.
-    return (
-        stack_count * 2
-        + target_count * 10
-    )
-
-
-def find_best_shed_column(
+def find_shed_stack_column(
     df,
-    report_name
+    report_name,
 ):
 
-    # 1. Explicit header
+    # --------------------------------------------------------
+    # 1. Named column
+    # --------------------------------------------------------
+
     for col in df.columns:
 
         name = str(col).strip().lower()
 
+        normalized = (
+            name
+            .replace(" ", "")
+            .replace("_", "")
+        )
+
+
         if (
             "shed/stack" in name
             or "shed / stack" in name
-            or name == "shed"
-            or "shed stack" in name
+            or "shedstack" in normalized
         ):
+
             return col
 
-    # 2. Score every column.
-    # This is the important DSR fix.
-    scores = []
+
+    # --------------------------------------------------------
+    # 2. Inspection -> Shed
+    # --------------------------------------------------------
+
+    if report_name == "INSPECTION":
+
+        for col in df.columns:
+
+            name = (
+                str(col)
+                .strip()
+                .lower()
+            )
+
+            if name == "shed":
+
+                return col
+
+
+    # --------------------------------------------------------
+    # 3. Generic content detection
+    #
+    # VERY IMPORTANT FOR DSR
+    #
+    # DSR tables can have numeric column names:
+    #
+    # 0, 1, 2, 3...
+    #
+    # Therefore we inspect ALL columns instead of blindly
+    # assuming column 2.
+    # --------------------------------------------------------
+
+    best_col = None
+    best_score = 0
+
 
     for col in df.columns:
 
-        score = score_shed_column(
+        sample = (
             df[col]
+            .dropna()
+            .astype(str)
+            .head(200)
         )
 
-        scores.append(
-            (score, col)
-        )
 
-    scores.sort(
-        key=lambda x: x[0],
-        reverse=True
-    )
+        if len(sample) == 0:
+            continue
 
-    if scores and scores[0][0] > 0:
 
-        best_score, best_col = scores[0]
+        score = 0
+
+
+        for value in sample:
+
+            value = value.strip()
+
+
+            # 87/87D06
+            if re.match(
+                r"^\s*\d+\s*/",
+                value,
+            ):
+
+                score += 1
+
+
+            # Shed 85
+            elif re.search(
+                r"\bShed\s*[:\-]?\s*\d+\b",
+                value,
+                re.I,
+            ):
+
+                score += 1
+
+
+        if score > best_score:
+
+            best_score = score
+            best_col = col
+
+
+    if best_col is not None:
 
         print(
-            f"Using detected Shed/Stack column "
-            f"{best_col} (score={best_score})"
+            f"Detected {report_name} "
+            f"Shed/Stack column:",
+            best_col,
+            "score=",
+            best_score,
         )
 
         return best_col
+
+
+    # --------------------------------------------------------
+    # 4. DSI / DSR fallback
+    # --------------------------------------------------------
+
+    if report_name in ["DSI", "DSR"]:
+
+        if len(df.columns) > 2:
+
+            print(
+                f"{report_name}: "
+                "Using fallback column 2"
+            )
+
+            return df.columns[2]
+
 
     return None
 
 
 # ============================================================
-# ROBUST HTML PARSER
+# FILTER TARGET SHEDS
+# ============================================================
+
+def filter_target_sheds(
+    df,
+    report_name,
+):
+
+    if df.empty:
+
+        return pd.DataFrame()
+
+
+    df = df.copy()
+
+
+    shed_col = find_shed_stack_column(
+        df,
+        report_name,
+    )
+
+
+    if shed_col is None:
+
+        print(
+            "\nWARNING:",
+            report_name,
+            "Shed/Stack column NOT FOUND",
+        )
+
+        print(
+            "Available columns:"
+        )
+
+        for col in df.columns:
+
+            print(
+                " -",
+                col,
+            )
+
+
+        return pd.DataFrame()
+
+
+    print(
+        "\nUsing Shed Column:",
+        shed_col,
+    )
+
+
+    df["Shed_Clean"] = (
+        df[shed_col]
+        .apply(extract_shed)
+    )
+
+
+    detected = (
+        df.loc[
+            df["Shed_Clean"] != "",
+            "Shed_Clean",
+        ]
+        .value_counts()
+        .sort_index()
+    )
+
+
+    print(
+        "\nDetected Shed Counts"
+    )
+
+    print(
+        "-" * 50
+    )
+
+
+    if len(detected) > 0:
+
+        print(
+            detected.to_string()
+        )
+
+    else:
+
+        print(
+            "NO SHEDS DETECTED"
+        )
+
+
+    clean = df[
+        df["Shed_Clean"].isin(
+            TARGET_SHEDS
+        )
+    ].copy()
+
+
+    return clean
+
+
+# ============================================================
+# HTML PARSER
 # ============================================================
 
 def parse_report(
     report_name,
-    html
+    html,
 ):
 
     print(
-        "\nParsing",
-        report_name,
-        "HTML..."
-    )
-
-    print("-" * 70)
-
-    # header=None is intentional:
-    # different tables have different header rows.
-    tables = pd.read_html(
-        StringIO(html),
-        header=None
+        "\n" + "=" * 70
     )
 
     print(
-        "Tables Found :",
-        len(tables)
+        "PARSING",
+        report_name,
     )
 
-    # --------------------------------------------------------
-    # Save complete raw parse
-    # --------------------------------------------------------
+    print(
+        "=" * 70
+    )
 
-    raw_frames = []
+
+    try:
+
+        tables = pd.read_html(
+            StringIO(html)
+        )
+
+    except Exception as e:
+
+        raise RuntimeError(
+            f"{report_name}: "
+            f"HTML table parsing failed: {e}"
+        )
+
+
+    print(
+        "Tables Found:",
+        len(tables),
+    )
+
+
+    if not tables:
+
+        raise RuntimeError(
+            f"{report_name}: "
+            "No HTML tables found"
+        )
+
+
+    frames = []
+
 
     for table in tables:
 
-        if table is None or table.empty:
+        if table is None:
             continue
 
-        frame = pd.DataFrame(table).copy()
-        frame.columns = range(frame.shape[1])
+        if table.empty:
+            continue
 
-        raw_frames.append(frame)
 
-    if not raw_frames:
-        raise RuntimeError(
-            f"No HTML tables found for {report_name}"
+        frame = pd.DataFrame(
+            table
         )
 
+
+        if not frame.empty:
+
+            frames.append(
+                frame
+            )
+
+
+    if not frames:
+
+        raise RuntimeError(
+            f"{report_name}: "
+            "No usable tables"
+        )
+
+
     raw = pd.concat(
-        raw_frames,
+        frames,
         ignore_index=True,
-        sort=False
     )
 
+
     print(
-        "All Rows     :",
-        len(raw)
+        "All Rows:",
+        len(raw),
     )
+
+
+    # --------------------------------------------------------
+    # Save complete report
+    # --------------------------------------------------------
 
     all_file = (
         OUTPUT /
         f"{report_name}_ALL_DATA.xlsx"
     )
 
-    try:
-        raw.to_excel(
-            all_file,
-            index=False
-        )
-    except PermissionError:
-        print(
-            "WARNING:",
-            all_file.name,
-            "is open."
-        )
+
+    raw.to_excel(
+        all_file,
+        index=False,
+    )
+
+
+    print(
+        "All Data:",
+        all_file,
+    )
+
 
     # --------------------------------------------------------
-    # Extract rows table-by-table.
-    #
-    # This prevents DSR tables with different headers from
-    # destroying the Shed/Stack position after concat.
+    # Filter target sheds
     # --------------------------------------------------------
 
-    selected_frames = []
-    table_hits = []
+    clean = filter_target_sheds(
+        raw,
+        report_name,
+    )
 
-    for table_no, table in enumerate(
-        tables,
-        start=1
-    ):
-
-        if table is None or table.empty:
-            continue
-
-        frame = pd.DataFrame(table).copy()
-        frame.columns = range(frame.shape[1])
-
-        shed_col = find_best_shed_column(
-            frame,
-            report_name
-        )
-
-        if shed_col is None:
-            continue
-
-        frame["Shed_Clean"] = (
-            frame[shed_col]
-            .apply(extract_shed)
-        )
-
-        selected = frame[
-            frame["Shed_Clean"].isin(
-                TARGET_SHEDS
-            )
-        ].copy()
-
-        if not selected.empty:
-
-            selected["Source_Table"] = table_no
-
-            selected_frames.append(
-                selected
-            )
-
-            table_hits.append(
-                (table_no, len(selected))
-            )
-
-    if selected_frames:
-
-        clean = pd.concat(
-            selected_frames,
-            ignore_index=True,
-            sort=False
-        )
-
-        # Remove exact duplicates caused by repeated HTML
-        # header/table rendering.
-        clean = clean.drop_duplicates(
-            ignore_index=True
-        )
-
-    else:
-        clean = pd.DataFrame()
-
-    # --------------------------------------------------------
-    # Output
-    # --------------------------------------------------------
 
     target_file = (
         OUTPUT /
         f"{report_name}_13_TARGET_SHEDS.xlsx"
     )
 
-    try:
 
-        clean.to_excel(
-            target_file,
-            index=False
-        )
-
-    except PermissionError:
-
-        target_file = (
-            OUTPUT /
-            (
-                f"{report_name}_13_TARGET_SHEDS_"
-                + datetime.now().strftime(
-                    "%Y%m%d_%H%M%S"
-                )
-                + ".xlsx"
-            )
-        )
-
-        clean.to_excel(
-            target_file,
-            index=False
-        )
-
-        print(
-            "WARNING: Original target file was open."
-        )
-
-        print(
-            "Saved new file:",
-            target_file
-        )
-
-    print(
-        "\n13 Shed Rows:",
-        len(clean)
+    clean.to_excel(
+        target_file,
+        index=False,
     )
 
+
     print(
-        "Output      :",
-        target_file
+        "13 Shed Rows:",
+        len(clean),
     )
 
-    if table_hits:
 
-        print(
-            "\nTables contributing target rows:"
-        )
+    print(
+        "Target File:",
+        target_file,
+    )
 
-        print(
-            table_hits
-        )
 
     if not clean.empty:
 
@@ -771,27 +825,19 @@ def parse_report(
             "\nShed Wise Count"
         )
 
-        print("-" * 50)
+        print(
+            "-" * 50
+        )
 
         print(
-            clean["Shed_Clean"]
+            clean[
+                "Shed_Clean"
+            ]
             .value_counts()
             .sort_index()
             .to_string()
         )
 
-    else:
-
-        print(
-            "\nWARNING:",
-            report_name,
-            "returned ZERO target shed rows."
-        )
-
-        # For debugging, show top column scores.
-        print(
-            "Column detection failed for target rows."
-        )
 
     return clean
 
@@ -802,100 +848,128 @@ def parse_report(
 
 def process_inspection():
 
-    print("\n" + "=" * 70)
-    print("Inspection Data")
-    print("=" * 70)
-
-    source = (
-        OUTPUT /
-        "STACKWISE_INSPECTION_13_TARGET_SHEDS.xlsx"
+    print(
+        "\n" + "=" * 70
     )
 
-    if not source.exists():
+    print(
+        "INSPECTION DATA"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    possible_files = [
+
+        OUTPUT /
+        "STACKWISE_INSPECTION_13_TARGET_SHEDS.xlsx",
+
+        BASE /
+        "STACKWISE_INSPECTION_13_TARGET_SHEDS.xlsx",
+
+        OUTPUT /
+        "INSPECTION_13_TARGET_SHEDS.xlsx",
+
+        BASE /
+        "INSPECTION_13_TARGET_SHEDS.xlsx",
+    ]
+
+
+    source = None
+
+
+    for file in possible_files:
+
+        if file.exists():
+
+            source = file
+            break
+
+
+    if source is None:
 
         print(
-            "Inspection file not found:",
-            source
+            "Inspection source file NOT FOUND."
+        )
+
+        print(
+            "Inspection will be 0."
         )
 
         return pd.DataFrame()
+
+
+    print(
+        "Inspection Source:",
+        source,
+    )
+
 
     try:
 
-        df = pd.read_excel(source)
+        df = pd.read_excel(
+            source
+        )
 
-    except PermissionError:
+    except Exception as e:
 
         print(
-            "WARNING: Inspection file is open."
+            "Inspection read error:",
+            e,
         )
 
         return pd.DataFrame()
 
-    # Inspection normally has Shed column.
-    shed_col = None
 
-    for col in df.columns:
+    clean = filter_target_sheds(
+        df,
+        "INSPECTION",
+    )
 
-        if str(col).strip().lower() == "shed":
-            shed_col = col
-            break
-
-    if shed_col is None:
-
-        for col in df.columns:
-
-            name = str(col).strip().lower()
-
-            if "shed" in name:
-                shed_col = col
-                break
-
-    if shed_col is None:
-
-        print(
-            "WARNING: Inspection Shed column not found."
-        )
-
-        return pd.DataFrame()
 
     print(
-        "Using Shed Column :",
-        shed_col
+        "Inspection Target Rows:",
+        len(clean),
     )
 
-    df = df.copy()
-
-    df["Shed_Clean"] = (
-        df[shed_col]
-        .apply(extract_shed)
-    )
-
-    clean = df[
-        df["Shed_Clean"].isin(
-            TARGET_SHEDS
-        )
-    ].copy()
-
-    print(
-        "\nInspection target rows:",
-        len(clean)
-    )
-
-    if not clean.empty:
-
-        print(
-            clean["Shed_Clean"]
-            .value_counts()
-            .sort_index()
-            .to_string()
-        )
 
     return clean
 
 
 # ============================================================
-# BUILD MASTER
+# SHED SUMMARY
+# ============================================================
+
+def get_shed_count(
+    df,
+    shed,
+):
+
+    if df is None:
+        return 0
+
+
+    if df.empty:
+        return 0
+
+
+    if "Shed_Clean" not in df.columns:
+        return 0
+
+
+    return int(
+        (
+            df["Shed_Clean"]
+            .astype(str)
+            == str(shed)
+        ).sum()
+    )
+
+
+# ============================================================
+# BUILD MASTER EXCEL
 # ============================================================
 
 def build_master(
@@ -903,506 +977,1069 @@ def build_master(
     dsr,
     inspection,
     from_date,
-    to_date
+    to_date,
 ):
 
-    print("\n" + "=" * 70)
-    print("BUILDING MASTER DASHBOARD")
-    print("=" * 70)
+    print(
+        "\n" + "=" * 70
+    )
+
+    print(
+        "BUILDING MASTER EXCEL"
+    )
+
+    print(
+        "=" * 70
+    )
+
 
     rows = []
 
+
     ordered_sheds = sorted(
         TARGET_SHEDS,
-        key=lambda x: int(x)
+        key=lambda x: int(x),
     )
+
 
     for shed in ordered_sheds:
 
-        dsi_count = 0
-        dsr_count = 0
-        inspection_count = 0
-
-        if "Shed_Clean" in dsi.columns:
-
-            dsi_count = int(
-                (
-                    dsi["Shed_Clean"] == shed
-                ).sum()
-            )
-
-        if "Shed_Clean" in dsr.columns:
-
-            dsr_count = int(
-                (
-                    dsr["Shed_Clean"] == shed
-                ).sum()
-            )
-
-        if "Shed_Clean" in inspection.columns:
-
-            inspection_count = int(
-                (
-                    inspection["Shed_Clean"] == shed
-                ).sum()
-            )
-
         rows.append({
-            "Shed": shed,
-            "DSI_Rows": dsi_count,
-            "DSR_Rows": dsr_count,
-            "Inspection_Rows": inspection_count
+
+            "Shed":
+                shed,
+
+            "DSI":
+                get_shed_count(
+                    dsi,
+                    shed,
+                ),
+
+            "DSR":
+                get_shed_count(
+                    dsr,
+                    shed,
+                ),
+
+            "Inspection":
+                get_shed_count(
+                    inspection,
+                    shed,
+                ),
         })
 
-    shed_summary = pd.DataFrame(rows)
+
+    shed_summary = pd.DataFrame(
+        rows
+    )
+
 
     summary = pd.DataFrame(
+
         [
+
             [
                 "Generated On",
-                datetime.now().strftime(
+                datetime.now(
+                    IST
+                ).strftime(
                     "%d-%m-%Y %I:%M:%S %p"
-                )
+                ),
             ],
-            ["From Date", from_date],
-            ["To Date", to_date],
-            ["Target Sheds", len(TARGET_SHEDS)],
-            ["DSI Records", len(dsi)],
-            ["DSR Records", len(dsr)],
-            ["Inspection Records", len(inspection)]
+
+            [
+                "From Date",
+                from_date,
+            ],
+
+            [
+                "To Date",
+                to_date,
+            ],
+
+            [
+                "Target Sheds",
+                len(TARGET_SHEDS),
+            ],
+
+            [
+                "DSI Records",
+                len(dsi),
+            ],
+
+            [
+                "DSR Records",
+                len(dsr),
+            ],
+
+            [
+                "Inspection Records",
+                len(inspection),
+            ],
         ],
-        columns=["Item", "Value"]
+
+        columns=[
+            "Item",
+            "Value",
+        ],
     )
+
 
     master = (
         OUTPUT /
         "ANNA_DARPAN_DAILY_MASTER.xlsx"
     )
 
-    def write_master(path):
 
-        with pd.ExcelWriter(
-            path,
-            engine="openpyxl"
-        ) as writer:
+    with pd.ExcelWriter(
+        master,
+        engine="openpyxl",
+    ) as writer:
 
-            summary.to_excel(
-                writer,
-                sheet_name="Summary",
-                index=False
-            )
-
-            shed_summary.to_excel(
-                writer,
-                sheet_name="Shed_Summary",
-                index=False
-            )
-
-            dsi.to_excel(
-                writer,
-                sheet_name="DSI_13_Sheds",
-                index=False
-            )
-
-            dsr.to_excel(
-                writer,
-                sheet_name="DSR_13_Sheds",
-                index=False
-            )
-
-            inspection.to_excel(
-                writer,
-                sheet_name="Inspection_13_Sheds",
-                index=False
-            )
-
-    try:
-
-        write_master(master)
-
-    except PermissionError:
-
-        master = (
-            OUTPUT /
-            (
-                "ANNA_DARPAN_DAILY_MASTER_"
-                + datetime.now().strftime(
-                    "%Y%m%d_%H%M%S"
-                )
-                + ".xlsx"
-            )
+        summary.to_excel(
+            writer,
+            sheet_name="Summary",
+            index=False,
         )
 
-        write_master(master)
 
-        print(
-            "WARNING: Existing master file was open."
+        shed_summary.to_excel(
+            writer,
+            sheet_name="Shed_Summary",
+            index=False,
         )
 
-        print(
-            "New master:",
-            master
+
+        dsi.to_excel(
+            writer,
+            sheet_name="DSI_13_Sheds",
+            index=False,
         )
 
-    print("\nSUCCESS")
-    print("Master :", master)
 
-    print("\nShed Wise Summary")
-    print("-" * 70)
+        dsr.to_excel(
+            writer,
+            sheet_name="DSR_13_Sheds",
+            index=False,
+        )
+
+
+        inspection.to_excel(
+            writer,
+            sheet_name="Inspection_13_Sheds",
+            index=False,
+        )
+
+
+    print(
+        "\nMASTER EXCEL CREATED:"
+    )
+
+    print(
+        master
+    )
+
+
+    print(
+        "\nShed Wise Summary"
+    )
+
+    print(
+        "-" * 70
+    )
+
+
     print(
         shed_summary.to_string(
             index=False
         )
     )
 
+
     return master, shed_summary
 
 
 # ============================================================
-# WHATSAPP MESSAGE
+# WHATSAPP TEXT
 # ============================================================
 
-def create_whatsapp_message(
+def build_whatsapp_message(
+    from_date,
+    to_date,
     dsi,
     dsr,
     inspection,
-    from_date,
-    to_date
+    shed_summary,
 ):
 
-    lines = []
+    message = []
 
-    lines.append(
+
+    message.append(
         "🌾 ANNA DARPAN DAILY REPORT"
     )
 
-    lines.append(
+    message.append(
         "--------------------------------"
     )
 
-    lines.append(
+    message.append(
         f"📅 From : {from_date}"
     )
 
-    lines.append(
+    message.append(
         f"📅 To   : {to_date}"
     )
 
-    lines.append("")
+    message.append("")
 
-    lines.append(
+    message.append(
         "📊 13 SHED SUMMARY"
     )
 
-    lines.append(
+    message.append(
         "--------------------------------"
     )
 
-    lines.append(
+    message.append(
         f"DSI         : {len(dsi)}"
     )
 
-    lines.append(
+    message.append(
         f"DSR         : {len(dsr)}"
     )
 
-    lines.append(
+    message.append(
         f"Inspection  : {len(inspection)}"
     )
 
-    lines.append("")
+    message.append("")
 
-    lines.append(
+    message.append(
         "Shed | DSI | DSR | Inspection"
     )
 
-    lines.append(
+    message.append(
         "--------------------------------"
     )
 
-    for shed in sorted(
-        TARGET_SHEDS,
-        key=lambda x: int(x)
-    ):
 
-        dsi_count = 0
-        dsr_count = 0
-        inspection_count = 0
+    for _, row in shed_summary.iterrows():
 
-        if "Shed_Clean" in dsi.columns:
+        message.append(
 
-            dsi_count = int(
-                (
-                    dsi["Shed_Clean"] == shed
-                ).sum()
-            )
+            f"{row['Shed']} | "
+            f"{row['DSI']} | "
+            f"{row['DSR']} | "
+            f"{row['Inspection']}"
 
-        if "Shed_Clean" in dsr.columns:
-
-            dsr_count = int(
-                (
-                    dsr["Shed_Clean"] == shed
-                ).sum()
-            )
-
-        if "Shed_Clean" in inspection.columns:
-
-            inspection_count = int(
-                (
-                    inspection["Shed_Clean"] == shed
-                ).sum()
-            )
-
-        lines.append(
-            f"{shed} | {dsi_count} | "
-            f"{dsr_count} | "
-            f"{inspection_count}"
         )
 
-    lines.append("")
-    lines.append(
+
+    message.append("")
+
+    message.append(
         "📎 Master Excel attached below."
     )
 
-    return "\n".join(lines)
+
+    return "\n".join(
+        message
+    )
+
+
+# ============================================================
+# WHATSAPP API
+# ============================================================
+
+def whatsapp_headers(
+    whatsapp_token,
+):
+
+    return {
+
+        "Authorization":
+            f"Bearer {whatsapp_token}",
+
+        "Content-Type":
+            "application/json",
+    }
+
+
+# ============================================================
+# SEND WHATSAPP TEXT
+# ============================================================
+
+def send_whatsapp_text(
+    message,
+):
+
+    print(
+        "\n" + "=" * 70
+    )
+
+    print(
+        "SENDING WHATSAPP MESSAGE"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    (
+        whatsapp_token,
+        phone_number_id,
+        to_number,
+        api_version,
+    ) = load_whatsapp_config()
+
+
+    if not whatsapp_token:
+
+        raise RuntimeError(
+            "WHATSAPP_TOKEN secret not found."
+        )
+
+
+    if not phone_number_id:
+
+        raise RuntimeError(
+            "PHONE_NUMBER_ID secret not found."
+        )
+
+
+    if not to_number:
+
+        raise RuntimeError(
+            "TO_NUMBER secret not found."
+        )
+
+
+    url = (
+
+        f"https://graph.facebook.com/"
+        f"{api_version}/"
+        f"{phone_number_id}/messages"
+    )
+
+
+    payload = {
+
+        "messaging_product":
+            "whatsapp",
+
+        "to":
+            to_number,
+
+        "type":
+            "text",
+
+        "text": {
+
+            "preview_url":
+                False,
+
+            "body":
+                message,
+        },
+    }
+
+
+    response = requests.post(
+
+        url,
+
+        headers=whatsapp_headers(
+            whatsapp_token
+        ),
+
+        json=payload,
+
+        timeout=120,
+    )
+
+
+    print(
+        "HTTP STATUS :",
+        response.status_code,
+    )
+
+    print(
+        "RESPONSE    :",
+        response.text,
+    )
+
+
+    if response.status_code not in [
+        200,
+        201,
+    ]:
+
+        raise RuntimeError(
+            "WhatsApp text message failed."
+        )
+
+
+    print(
+        "SUCCESS WhatsApp text sent."
+    )
+
+
+# ============================================================
+# UPLOAD EXCEL TO WHATSAPP
+# ============================================================
+
+def upload_whatsapp_document(
+    file_path,
+):
+
+    print(
+        "\n" + "=" * 70
+    )
+
+    print(
+        "UPLOADING MASTER EXCEL TO WHATSAPP"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    (
+        whatsapp_token,
+        phone_number_id,
+        to_number,
+        api_version,
+    ) = load_whatsapp_config()
+
+
+    url = (
+
+        f"https://graph.facebook.com/"
+        f"{api_version}/"
+        f"{phone_number_id}/media"
+    )
+
+
+    headers = {
+
+        "Authorization":
+            f"Bearer {whatsapp_token}",
+    }
+
+
+    data = {
+
+        "messaging_product":
+            "whatsapp",
+    }
+
+
+    with open(
+        file_path,
+        "rb",
+    ) as file:
+
+        files = {
+
+            "file": (
+
+                file_path.name,
+
+                file,
+
+                "application/"
+                "vnd.openxmlformats-officedocument."
+                "spreadsheetml.sheet",
+            )
+        }
+
+
+        response = requests.post(
+
+            url,
+
+            headers=headers,
+
+            data=data,
+
+            files=files,
+
+            timeout=300,
+        )
+
+
+    print(
+        "UPLOAD STATUS :",
+        response.status_code,
+    )
+
+    print(
+        "UPLOAD RESPONSE:",
+        response.text,
+    )
+
+
+    if response.status_code not in [
+        200,
+        201,
+    ]:
+
+        raise RuntimeError(
+            "WhatsApp Excel upload failed."
+        )
+
+
+    result = response.json()
+
+
+    media_id = result.get(
+        "id"
+    )
+
+
+    if not media_id:
+
+        raise RuntimeError(
+            "WhatsApp media ID not received."
+        )
+
+
+    print(
+        "Media ID:",
+        media_id,
+    )
+
+
+    return media_id
+
+
+# ============================================================
+# SEND EXCEL DOCUMENT
+# ============================================================
+
+def send_whatsapp_document(
+    media_id,
+    file_path,
+):
+
+    print(
+        "\n" + "=" * 70
+    )
+
+    print(
+        "SENDING MASTER EXCEL TO WHATSAPP"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    (
+        whatsapp_token,
+        phone_number_id,
+        to_number,
+        api_version,
+    ) = load_whatsapp_config()
+
+
+    url = (
+
+        f"https://graph.facebook.com/"
+        f"{api_version}/"
+        f"{phone_number_id}/messages"
+    )
+
+
+    payload = {
+
+        "messaging_product":
+            "whatsapp",
+
+        "to":
+            to_number,
+
+        "type":
+            "document",
+
+        "document": {
+
+            "id":
+                media_id,
+
+            "filename":
+                file_path.name,
+
+            "caption":
+                "🌾 Anna Darpan Daily Master Excel",
+        },
+    }
+
+
+    response = requests.post(
+
+        url,
+
+        headers=whatsapp_headers(
+            whatsapp_token
+        ),
+
+        json=payload,
+
+        timeout=120,
+    )
+
+
+    print(
+        "DOCUMENT STATUS :",
+        response.status_code,
+    )
+
+    print(
+        "DOCUMENT RESPONSE:",
+        response.text,
+    )
+
+
+    if response.status_code not in [
+        200,
+        201,
+    ]:
+
+        raise RuntimeError(
+            "WhatsApp Excel document send failed."
+        )
+
+
+    print(
+        "SUCCESS Excel document sent to WhatsApp."
+    )
+
+
+# ============================================================
+# VALIDATE SECRETS
+# ============================================================
+
+def validate_secrets():
+
+    print(
+        "\n" + "=" * 70
+    )
+
+    print(
+        "CHECKING GITHUB SECRETS"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    anna_token = load_anna_token()
+
+
+    (
+        whatsapp_token,
+        phone_number_id,
+        to_number,
+        api_version,
+    ) = load_whatsapp_config()
+
+
+    if anna_token:
+
+        print(
+            "Anna Darpan Token : OK"
+        )
+
+    else:
+
+        print(
+            "Anna Darpan Token : MISSING"
+        )
+
+
+    if whatsapp_token:
+
+        print(
+            "WhatsApp Token    : OK"
+        )
+
+    else:
+
+        print(
+            "WhatsApp Token    : MISSING"
+        )
+
+
+    if phone_number_id:
+
+        print(
+            "Phone Number ID   : OK"
+        )
+
+    else:
+
+        print(
+            "Phone Number ID   : MISSING"
+        )
+
+
+    if to_number:
+
+        print(
+            "WhatsApp To       : OK"
+        )
+
+    else:
+
+        print(
+            "WhatsApp To       : MISSING"
+        )
+
+
+    print(
+        "WhatsApp API      :",
+        api_version,
+    )
+
+
+    if not anna_token:
+
+        raise RuntimeError(
+            "Anna Darpan token missing."
+        )
+
+
+    if not whatsapp_token:
+
+        raise RuntimeError(
+            "WhatsApp token missing."
+        )
+
+
+    if not phone_number_id:
+
+        raise RuntimeError(
+            "Phone Number ID missing."
+        )
+
+
+    if not to_number:
+
+        raise RuntimeError(
+            "WhatsApp TO number missing."
+        )
 
 
 # ============================================================
 # MAIN
 # ============================================================
 
-print("\n" + "=" * 70)
-print("ANNA DARPAN DAILY AUTOMATION - FINAL")
-print("=" * 70)
-
-if not load_token():
+def main():
 
     print(
-        "\nERROR: Anna Darpan token not found."
+        "\n" + "=" * 70
     )
-
-    raise SystemExit
-
-print("\nAnna Darpan Token : OK")
-
-try:
-
-    whatsapp_token, phone_id, to_number = (
-        load_whatsapp_config()
-    )
-
-    print("WhatsApp Config   : OK")
-    print(
-        "WhatsApp Number   :",
-        to_number
-    )
-
-except Exception as e:
 
     print(
-        "\nWhatsApp Config Error:",
-        e
+        "ANNA DARPAN DAILY AUTOMATION - CLOUD"
     )
 
-    raise SystemExit
+    print(
+        "=" * 70
+    )
 
 
-from zoneinfo import ZoneInfo
+    # --------------------------------------------------------
+    # Secrets
+    # --------------------------------------------------------
 
-# ============================================================
-# AUTOMATIC DAILY DATE - INDIA
-# ============================================================
+    validate_secrets()
 
-india_now = datetime.now(
-    ZoneInfo("Asia/Kolkata")
-)
 
-from_date = india_now.strftime("%d-%m-%Y")
-to_date = from_date
+    # --------------------------------------------------------
+    # TODAY ONLY
+    # --------------------------------------------------------
 
-print(
-    "\nAutomatic Daily Report Date"
-)
+    from_date, to_date = (
+        get_today_dates()
+    )
 
-print(
-    "-" * 70
-)
 
-print(
-    "India Date :",
-    from_date
-)
+    print(
+        "\nDAILY REPORT DATE"
+    )
 
-print(
-    "From Date  :",
-    from_date
-)
+    print(
+        "-" * 70
+    )
 
-print(
-    "To Date    :",
-    to_date
-)
+    print(
+        "From :",
+        from_date,
+    )
 
-print("\nParameters")
-print("-" * 70)
-print("From :", from_date)
-print("To   :", to_date)
-print(
-    "Target Sheds:",
-    ", ".join(
-        sorted(
-            TARGET_SHEDS,
-            key=lambda x: int(x)
+    print(
+        "To   :",
+        to_date,
+    )
+
+
+    print(
+        "\nTarget Sheds:"
+    )
+
+    print(
+        ", ".join(
+            sorted(
+                TARGET_SHEDS,
+                key=lambda x: int(x),
+            )
         )
     )
-)
 
 
-try:
+    # ========================================================
+    # API ENDPOINTS
+    # ========================================================
 
     DSI_ENDPOINT = (
+
         "https://adbackend.annadarpan.in/"
-        "prdannadarpan.in/reports/api/v2/DSIReport"
+        "prdannadarpan.in/reports/api/v2/"
+        "DSIReport"
     )
+
 
     DSR_ENDPOINT = (
+
         "https://adbackend.annadarpan.in/"
-        "prdannadarpan.in/reports/api/v2/DSRReport"
+        "prdannadarpan.in/reports/api/v2/"
+        "DSRReport"
     )
 
-    # --------------------------------------------------------
-    # DSI
-    # --------------------------------------------------------
+
+    # ========================================================
+    # DOWNLOAD DSI
+    # ========================================================
 
     dsi_html = download_report(
+
         "DSI",
+
         DSI_ENDPOINT,
+
         (
             "https://www.annadarpan.in/"
             "reporting/depotDSIReport"
         ),
+
         from_date,
-        to_date
+
+        to_date,
     )
 
-    # --------------------------------------------------------
-    # DSR
-    # --------------------------------------------------------
+
+    # ========================================================
+    # DOWNLOAD DSR
+    # ========================================================
 
     dsr_html = download_report(
+
         "DSR",
+
         DSR_ENDPOINT,
+
         (
             "https://www.annadarpan.in/"
             "reporting/depotDSRReport"
         ),
+
         from_date,
-        to_date
+
+        to_date,
     )
 
-    # --------------------------------------------------------
-    # PARSE
-    # --------------------------------------------------------
+
+    # ========================================================
+    # PARSE DSI
+    # ========================================================
 
     dsi = parse_report(
         "DSI",
-        dsi_html
+        dsi_html,
     )
+
+
+    # ========================================================
+    # PARSE DSR
+    # ========================================================
 
     dsr = parse_report(
         "DSR",
-        dsr_html
+        dsr_html,
     )
 
-    # IMPORTANT:
-    # Do not silently continue with DSR=0.
-    # If API has HTML tables but parser gets zero target rows,
-    # stop and show failure clearly.
-    if len(dsr) == 0:
 
-        raise RuntimeError(
-            "DSR extraction returned 0 target shed rows. "
-            "Open OUTPUT\\DSR_REPORT.html and verify the report "
-            "structure/date range."
-        )
-
-    # --------------------------------------------------------
+    # ========================================================
     # INSPECTION
-    # --------------------------------------------------------
+    # ========================================================
 
     inspection = process_inspection()
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # MASTER
-    # --------------------------------------------------------
+    # ========================================================
 
     master, shed_summary = build_master(
+
         dsi,
+
         dsr,
+
         inspection,
+
         from_date,
-        to_date
+
+        to_date,
     )
 
-    # --------------------------------------------------------
-    # WHATSAPP TEXT
-    # --------------------------------------------------------
 
-    whatsapp_message = create_whatsapp_message(
+    # ========================================================
+    # WHATSAPP MESSAGE
+    # ========================================================
+
+    message = build_whatsapp_message(
+
+        from_date,
+
+        to_date,
+
         dsi,
+
         dsr,
+
         inspection,
-        from_date,
-        to_date
+
+        shed_summary,
     )
 
-    print("\n" + "=" * 70)
-    print("WHATSAPP MESSAGE PREVIEW")
-    print("=" * 70)
-    print(whatsapp_message)
 
-    send_whatsapp_message(
-        whatsapp_message
+    print(
+        "\n" + "=" * 70
     )
 
-    # --------------------------------------------------------
-    # WHATSAPP EXCEL ATTACHMENT
-    # --------------------------------------------------------
+    print(
+        "WHATSAPP MESSAGE PREVIEW"
+    )
+
+    print(
+        "=" * 70
+    )
+
+    print(
+        message
+    )
+
+
+    # ========================================================
+    # SEND TEXT
+    # ========================================================
+
+    send_whatsapp_text(
+        message
+    )
+
+
+    # ========================================================
+    # UPLOAD EXCEL
+    # ========================================================
 
     media_id = upload_whatsapp_document(
         master
     )
 
+
+    # ========================================================
+    # SEND EXCEL
+    # ========================================================
+
     send_whatsapp_document(
+
         media_id,
-        Path(master).name,
-        "📊 ANNA DARPAN DAILY MASTER EXCEL"
+
+        master,
     )
 
-    # --------------------------------------------------------
+
+    # ========================================================
     # FINAL
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 70)
-    print("ALL DAILY PROCESSING COMPLETED")
-    print("=" * 70)
-
-    print("\nMaster File:")
-    print(master)
-
-    print("\nWhatsApp Text: SENT")
-    print("WhatsApp Excel: SENT")
-
-except Exception as e:
-
-    print("\n" + "=" * 70)
-    print("DAILY PROCESS FAILED")
-    print("=" * 70)
+    # ========================================================
 
     print(
-        type(e).__name__,
-        ":",
-        e
+        "\n" + "=" * 70
     )
 
-    raise
+    print(
+        "ALL DAILY PROCESSING COMPLETED"
+    )
+
+    print(
+        "=" * 70
+    )
+
+
+    print(
+        "\nMaster File:"
+    )
+
+    print(
+        master
+    )
+
+
+    print(
+        "\nWhatsApp Text: SENT"
+    )
+
+    print(
+        "WhatsApp Excel: SENT"
+    )
+
+
+# ============================================================
+# RUN
+# ============================================================
+
+if __name__ == "__main__":
+
+    try:
+
+        main()
+
+    except Exception as e:
+
+        print(
+            "\n" + "=" * 70
+        )
+
+        print(
+            "DAILY PROCESS FAILED"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            type(e).__name__,
+            ":",
+            e
+        )
+
+        raise
