@@ -1,0 +1,30 @@
+name: Anna Darpan Daily Report
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests pandas openpyxl lxml html5lib beautifulsoup4
+
+      - name: Run Anna Darpan Daily Report
+        env:
+          ANNA_DARPAN_TOKEN: ${{ secrets.ANNA_DARPAN_TOKEN }}
+          WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
+          PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
+          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
+        run: |
+          python anna_darpan_cloud.py
