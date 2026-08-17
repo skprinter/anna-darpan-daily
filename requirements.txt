@@ -1,2 +1,7 @@
 requests
+pandas
+openpyxl
+lxml
+html5lib
+beautifulsoup4
 cryptography
