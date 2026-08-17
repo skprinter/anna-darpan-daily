@@ -20,15 +20,22 @@ jobs:
         run: |
           pip install requests pandas openpyxl lxml html5lib beautifulsoup4
 
-      - name: Check TO_NUMBER Secret
+      - name: Test Anna Darpan Login
         env:
-          TO_NUMBER: ${{ secrets.TO_NUMBER }}
+          ANNA_DARPAN_USERNAME: ${{ secrets.ANNA_DARPAN_USERNAME }}
+          ANNA_DARPAN_PASSWORD: ${{ secrets.ANNA_DARPAN_PASSWORD }}
         run: |
-          if [ -z "$TO_NUMBER" ]; then
+          python anna_login_test.py
+
+      - name: Check WhatsApp To Secret
+        env:
+          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
+        run: |
+          if [ -z "$WHATSAPP_TO" ]; then
             echo "WHATSAPP_TO is MISSING"
             exit 1
           else
-            echo "TO_NUMBER is PRESENT"
+            echo "WHATSAPP_TO is PRESENT"
           fi
 
       - name: Run Anna Darpan Daily Report
@@ -36,6 +43,6 @@ jobs:
           ANNA_DARPAN_TOKEN: ${{ secrets.ANNA_DARPAN_TOKEN }}
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
-          TO_NUMBER: ${{ secrets.TO_NUMBER }}
+          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
         run: |
           python anna_darpan_cloud.py
