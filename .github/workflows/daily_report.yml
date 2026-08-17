@@ -8,41 +8,56 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # =====================================================
+      # 1. CHECKOUT REPOSITORY
+      # =====================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
+
+      # =====================================================
+      # 2. SETUP PYTHON
+      # =====================================================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+
+      # =====================================================
+      # 3. INSTALL DEPENDENCIES
+      # =====================================================
       - name: Install dependencies
         run: |
-          pip install requests pandas openpyxl lxml html5lib beautifulsoup4
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
+
+      # =====================================================
+      # 4. TEST ANNA DARPAN LOGIN
+      # =====================================================
       - name: Test Anna Darpan Login
         env:
           ANNA_DARPAN_USERNAME: ${{ secrets.ANNA_DARPAN_USERNAME }}
           ANNA_DARPAN_PASSWORD: ${{ secrets.ANNA_DARPAN_PASSWORD }}
+          ANNA_DARPAN_CAPTCHA_TOKEN: ${{ secrets.ANNA_DARPAN_CAPTCHA_TOKEN }}
         run: |
           python anna_login_test.py
 
-      - name: Check WhatsApp To Secret
-        env:
-          WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
-        run: |
-          if [ -z "$WHATSAPP_TO" ]; then
-            echo "WHATSAPP_TO is MISSING"
-            exit 1
-          else
-            echo "WHATSAPP_TO is PRESENT"
-          fi
 
+      # =====================================================
+      # 5. RUN ANNA DARPAN DAILY REPORT
+      # =====================================================
       - name: Run Anna Darpan Daily Report
         env:
-          ANNA_DARPAN_TOKEN: ${{ secrets.ANNA_DARPAN_TOKEN }}
+          ANNA_DARPAN_USERNAME: ${{ secrets.ANNA_DARPAN_USERNAME }}
+          ANNA_DARPAN_PASSWORD: ${{ secrets.ANNA_DARPAN_PASSWORD }}
+          ANNA_DARPAN_CAPTCHA_TOKEN: ${{ secrets.ANNA_DARPAN_CAPTCHA_TOKEN }}
+
           WHATSAPP_TOKEN: ${{ secrets.WHATSAPP_TOKEN }}
           PHONE_NUMBER_ID: ${{ secrets.PHONE_NUMBER_ID }}
           WHATSAPP_TO: ${{ secrets.WHATSAPP_TO }}
+
         run: |
-          python anna_darpan_cloud.py
+          python anna_darpan_daily_report.py
